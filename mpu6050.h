@@ -1,36 +1,41 @@
-#ifndef MPU6050_H
-#define MPU6050_H
+#ifndef MPU_SYSTEM_H
+#define MPU_SYSTEM_H
 
-#include <stdio.h>
-#include <math.h>
-#include "driver/i2c.h"
-#include "esp_log.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/queue.h"
-#include "esp_timer.h"
+#include <stdint.h>
+#include <stdbool.h>
+
+// ================= SNAPSHOT =================
+
+typedef struct {
+
+    // Aceleração
+    float ax;
+    float ay;
+    float az;
+
+    // Gyro
+    float gx;
+    float gy;
+    float gz;
+
+    // Processamento
+    float magnitude;
+    float delta;
+
+    float pitch;
+    float roll;
+
+    const char *estado;
+
+    int64_t timestamp;
+
+} mpu_snapshot_t;
 
 
 
-// ================= CONFIG =================
+void mpu_main(void);
 
-#define MPU6050_ADDR         0x68
-#define I2C_MASTER_SCL_IO    22
-#define I2C_MASTER_SDA_IO    21
-#define I2C_MASTER_NUM       I2C_NUM_0
-#define I2C_MASTER_FREQ_HZ   400000
+// retorna snapshot completo (seguro)
+bool mpu_get_snapshot(mpu_snapshot_t *out);
 
-#define QUEUE_SIZE 10
-
-
-
-// ==================  MAIN  ====================
-
-void mpu_main();
-
- 
-
-
-
-
-#endif 
+#endif
