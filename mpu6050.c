@@ -1,11 +1,15 @@
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
+
 #include "driver/i2c.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/semphr.h"
 #include "esp_timer.h"
+
 
 #define TAG "MPU_SYSTEM"
 
@@ -19,19 +23,25 @@
 
 #define QUEUE_SIZE 10
 
-// ================= STRUCT =================
+// ================= STRUCT INTERNA =================
 
 typedef struct {
-    float ax, ay, az;     // aceleração (g)
-    float gx, gy, gz;     // rotação (°/s)
+    float ax, ay, az;
+    float gx, gy, gz;
     int64_t timestamp;
 } sensor_data_t;
 
-QueueHandle_t sensor_queue;
+// ================= RTOS =================
+
+static QueueHandle_t sensor_queue;
+static SemaphoreHandle_t snapshot_mutex;
+
+// snapshot global (🔥 coração do sistema)
+static mpu_snapshot_t g_snapshot = {0};
 
 // ================= I2C =================
 
-void i2c_master_init() {
+static void i2c_master_init(void) {
     i2c_config_t conf = {
         .mode = I2C_MODE_MASTER,
         .sda_io_num = I2C_MASTER_SDA_IO,
@@ -45,7 +55,7 @@ void i2c_master_init() {
     i2c_driver_install(I2C_MASTER_NUM, conf.mode, 0, 0, 0);
 }
 
-esp_err_t mpu6050_write(uint8_t reg, uint8_t data) {
+static esp_err_t mpu6050_write(uint8_t reg, uint8_t data) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
     i2c_master_start(cmd);
@@ -60,7 +70,7 @@ esp_err_t mpu6050_write(uint8_t reg, uint8_t data) {
     return ret;
 }
 
-esp_err_t mpu6050_read(uint8_t reg, uint8_t *data, size_t len) {
+static esp_err_t mpu6050_read(uint8_t reg, uint8_t *data, size_t len) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
 
     i2c_master_start(cmd);
@@ -82,9 +92,9 @@ esp_err_t mpu6050_read(uint8_t reg, uint8_t *data, size_t len) {
     return ret;
 }
 
-// ================= TASK 1: AQUISIÇÃO =================
+// ================= TASK 1: SENSOR =================
 
-void sensor_task(void *arg) {
+static void sensor_task(void *arg) {
 
     uint8_t data[14];
     TickType_t last_wake = xTaskGetTickCount();
@@ -95,7 +105,6 @@ void sensor_task(void *arg) {
 
             sensor_data_t sample;
 
-            // ----- RAW -----
             int16_t ax_raw = (data[0] << 8) | data[1];
             int16_t ay_raw = (data[2] << 8) | data[3];
             int16_t az_raw = (data[4] << 8) | data[5];
@@ -104,7 +113,6 @@ void sensor_task(void *arg) {
             int16_t gy_raw = (data[10] << 8) | data[11];
             int16_t gz_raw = (data[12] << 8) | data[13];
 
-            // ----- CONVERSÃO -----
             sample.ax = ax_raw / 16384.0f;
             sample.ay = ay_raw / 16384.0f;
             sample.az = az_raw / 16384.0f;
@@ -115,19 +123,18 @@ void sensor_task(void *arg) {
 
             sample.timestamp = esp_timer_get_time();
 
-            // ----- ENVIO -----
             if (xQueueSend(sensor_queue, &sample, 0) != pdTRUE) {
-                ESP_LOGW(TAG, "Fila cheia, descartando");
+                ESP_LOGW(TAG, "Fila cheia");
             }
         }
 
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(50)); // 20 Hz
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(50));
     }
 }
 
 // ================= TASK 2: PROCESSAMENTO =================
 
-void processing_task(void *arg) {
+static void processing_task(void *arg) {
 
     sensor_data_t sample;
 
@@ -141,28 +148,21 @@ void processing_task(void *arg) {
 
         if (xQueueReceive(sensor_queue, &sample, portMAX_DELAY)) {
 
-            // ================= TEMPO =================
-            float dt;
-
-            if (last_time == 0)
-                dt = 0.05f;
-            else
-                dt = (sample.timestamp - last_time) / 1000000.0f;
+            float dt = (last_time == 0)
+                       ? 0.05f
+                       : (sample.timestamp - last_time) / 1000000.0f;
 
             last_time = sample.timestamp;
 
-            // ================= ACELERAÇÃO =================
             float magnitude = sqrtf(
                 sample.ax * sample.ax +
                 sample.ay * sample.ay +
                 sample.az * sample.az
             );
 
-            // ================= DELTA =================
             float delta = fabsf(magnitude - last_magnitude);
             last_magnitude = magnitude;
 
-            // ================= ACC ANGLE =================
             float pitch_acc = atan2f(
                 -sample.ax,
                 sqrtf(sample.ay * sample.ay + sample.az * sample.az)
@@ -170,59 +170,87 @@ void processing_task(void *arg) {
 
             float roll_acc = atan2f(sample.ay, sample.az) * 180.0f / M_PI;
 
-            // ================= GYRO =================
+            // integração gyro
             pitch += sample.gx * dt;
             roll  += sample.gy * dt;
 
-            // ================= FILTRO =================
+            // filtro complementar
             float alpha = 0.98f;
 
-            pitch = alpha * pitch + (1.0f - alpha) * pitch_acc;
-            roll  = alpha * roll  + (1.0f - alpha) * roll_acc;
+            pitch = alpha * pitch + (1 - alpha) * pitch_acc;
+            roll  = alpha * roll  + (1 - alpha) * roll_acc;
 
-            // ================= CLASSIFICAÇÃO =================
-            const char *movimento;
+            const char *estado;
 
             if (delta > 0.5f)
-                movimento = "IMPACTO";
+                estado = "IMPACTO";
             else if (magnitude > 1.5f)
-                movimento = "BRUSCO";
+                estado = "BRUSCO";
             else if (magnitude > 1.05f)
-                movimento = "LEVE";
+                estado = "LEVE";
             else
-                movimento = "PARADO";
+                estado = "PARADO";
 
-            // ================= PRINT =================
-            printf("\n[T=%lld ms]\n", sample.timestamp / 1000);
+            // ================= SNAPSHOT (CRÍTICO) =================
+            if (xSemaphoreTake(snapshot_mutex, pdMS_TO_TICKS(5))) {
 
-            printf("ACC  -> X=%.2f Y=%.2f Z=%.2f | M=%.2f\n",
-                   sample.ax, sample.ay, sample.az, magnitude);
+                g_snapshot.ax = sample.ax;
+                g_snapshot.ay = sample.ay;
+                g_snapshot.az = sample.az;
 
-            printf("GYRO -> X=%.2f Y=%.2f Z=%.2f\n",
-                   sample.gx, sample.gy, sample.gz);
+                g_snapshot.gx = sample.gx;
+                g_snapshot.gy = sample.gy;
+                g_snapshot.gz = sample.gz;
 
-            printf("ANG  -> PITCH=%.2f° ROLL=%.2f°\n",
-                   pitch, roll);
+                g_snapshot.magnitude = magnitude;
+                g_snapshot.delta     = delta;
 
-            printf("DELTA=%.2f | ESTADO=%s\n", delta, movimento);
+                g_snapshot.pitch = pitch;
+                g_snapshot.roll  = roll;
+
+                g_snapshot.estado = estado;
+                g_snapshot.timestamp = sample.timestamp;
+
+                xSemaphoreGive(snapshot_mutex);
+            }
+
+            // debug
+            printf("PITCH=%.2f ROLL=%.2f | %s\n", pitch, roll, estado);
 
             vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 }
 
+// ================= API =================
+
+bool mpu_get_snapshot(mpu_snapshot_t *out) {
+
+    if (!out) return false;
+
+    if (xSemaphoreTake(snapshot_mutex, pdMS_TO_TICKS(10))) {
+
+        memcpy(out, &g_snapshot, sizeof(mpu_snapshot_t));
+
+        xSemaphoreGive(snapshot_mutex);
+        return true;
+    }
+
+    return false;
+}
+
 // ================= MAIN =================
 
-void mpu_main() {
+void mpu_main(void) {
 
     i2c_master_init();
-
-    mpu6050_write(0x6B, 0x00); // wake up
+    mpu6050_write(0x6B, 0x00);
 
     sensor_queue = xQueueCreate(QUEUE_SIZE, sizeof(sensor_data_t));
+    snapshot_mutex = xSemaphoreCreateMutex();
 
-    if (!sensor_queue) {
-        ESP_LOGE(TAG, "Erro ao criar fila");
+    if (!sensor_queue || !snapshot_mutex) {
+        ESP_LOGE(TAG, "Erro ao iniciar sistema");
         return;
     }
 
