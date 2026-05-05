@@ -213,7 +213,7 @@ void processing_task(void *arg) {
 
 // ================= MAIN =================
 
-void app_main() {
+void mpu_main() {
 
     i2c_master_init();
 
