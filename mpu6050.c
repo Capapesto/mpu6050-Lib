@@ -9,6 +9,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "esp_timer.h"
+#include "mpu6050.h"
 
 
 #define TAG "MPU_SYSTEM"
@@ -36,7 +37,7 @@ typedef struct {
 static QueueHandle_t sensor_queue;
 static SemaphoreHandle_t snapshot_mutex;
 
-// snapshot global
+// snapshot global 
 static mpu_snapshot_t g_snapshot = {0};
 
 // ================= I2C =================
