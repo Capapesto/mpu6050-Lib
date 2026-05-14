@@ -36,7 +36,7 @@ typedef struct {
 static QueueHandle_t sensor_queue;
 static SemaphoreHandle_t snapshot_mutex;
 
-// snapshot global (🔥 coração do sistema)
+// snapshot global
 static mpu_snapshot_t g_snapshot = {0};
 
 // ================= I2C =================
