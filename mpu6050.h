@@ -1,5 +1,5 @@
-#ifndef MPU_SYSTEM_H
-#define MPU_SYSTEM_H
+#ifndef MPU6050_H
+#define MPU6050_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -45,7 +45,7 @@ typedef struct {
 // Inicialização
 void mpu_main(void);
 
-// snapshot atual (thread-safe)
+// snapshot  (thread-safe)
 // Retorna false se não conseguiu acessar (timeout)
 bool mpu_get_snapshot(mpu_snapshot_t *out);
 
