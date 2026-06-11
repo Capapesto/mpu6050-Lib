@@ -83,7 +83,7 @@ static esp_err_t mpu6050_read(uint8_t reg, uint8_t *data, size_t len) {
 
     if (len > 1)
         i2c_master_read(cmd, data, len - 1, I2C_MASTER_ACK);
-
+//by caps
     i2c_master_read_byte(cmd, data + len - 1, I2C_MASTER_NACK);
     i2c_master_stop(cmd);
 
@@ -120,7 +120,7 @@ static void sensor_task(void *arg) {
 
             sample.gx = gx_raw / 131.0f;
             sample.gy = gy_raw / 131.0f;
-            sample.gz = gz_raw / 131.0f;
+            sample.gz = gz_raw / 131.0f; //by caps
 
             sample.timestamp = esp_timer_get_time();
 
@@ -171,7 +171,7 @@ static void processing_task(void *arg) {
 
             float roll_acc = atan2f(sample.ay, sample.az) * 180.0f / M_PI;
 
-            // integração gyro
+            // integração gyro by caps
             pitch += sample.gx * dt;
             roll  += sample.gy * dt;
 
@@ -215,7 +215,7 @@ static void processing_task(void *arg) {
                 xSemaphoreGive(snapshot_mutex);
             }
 
-            // debug
+            // debug caps
             printf("PITCH=%.2f ROLL=%.2f | %s\n", pitch, roll, estado);
 
             vTaskDelay(pdMS_TO_TICKS(100));
