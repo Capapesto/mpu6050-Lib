@@ -1,6 +1,6 @@
 # MPU6050Lib
 
-# Biblioteca MPU6050 para ESP-IDF
+# Biblioteca MPU6050 para ESP32
 
 Esta biblioteca fornece uma interface para utilizar o sensor MPU6050 (Acelerômetro e Giroscópio) com ESP-IDF. Todo o processo de comunicação I2C e cálculo matemático é feito em segundo plano, permitindo que você consulte os dados processados e prontos para uso no seu código principal.
 
@@ -74,7 +74,7 @@ A biblioteca expõe apenas duas funções principais para o seu uso diário:
 
 --------------------------------
 
-## Exemplo Prático de Uso
+## Exemplo de Uso
 
 ```c
 #include <stdio.h>
